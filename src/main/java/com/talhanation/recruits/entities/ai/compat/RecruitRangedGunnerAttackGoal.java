@@ -244,7 +244,7 @@ public class RecruitRangedGunnerAttackGoal extends Goal {
             // Respect the server config: if ammo consumption is disabled, just fill magazine
             if (!RecruitsServerConfig.RangedRecruitsNeedArrowsToShoot.get()) {
                 int magSize = getJEGMagazineCapacity();
-                mainHand.getOrCreateTag().putInt("Ammo", magSize);
+                JEGWeapon.writeAmmoNormalized(mainHand, magSize);
                 mainHand.getOrCreateTag().putInt("MaxAmmo", magSize);
                 recruit.setChargingCrossbow(false);
                 reloadProgress = 0;
@@ -448,10 +448,9 @@ public class RecruitRangedGunnerAttackGoal extends Goal {
         
         if (consumed > 0) {
             int newAmount = currentAmmo + consumed;
-            mainHand.getOrCreateTag().putInt("Ammo", newAmount);
+            JEGWeapon.writeAmmoNormalized(mainHand, newAmount);
             mainHand.getOrCreateTag().putInt("MaxAmmo", capacity);
-            
-            Main.LOGGER.info("[SUCCESS] Reload SUCCESSFUL: consumed {} ammo, magazine now: {}/{}", 
+            Main.LOGGER.info("[SUCCESS] Reload SUCCESSFUL: consumed {} ammo, magazine now: {}/{}",
                 consumed, newAmount, capacity);
         } else {
             Main.LOGGER.warn("[FAILED] Reload FAILED: no valid ammo found in inventory");
@@ -494,11 +493,11 @@ public class RecruitRangedGunnerAttackGoal extends Goal {
     }
 
     /**
-     * Get current ammo directly from JEG's NBT tag "Ammo"
-     */
+    * Get current ammo using normalized helper (AmmoCount preferred).
+    */
     private int getJEGCurrentAmmo() {
         ItemStack mainHand = recruit.getMainHandItem();
-        return mainHand.getOrCreateTag().getInt("Ammo");
+        return JEGWeapon.readAmmoNormalized(mainHand);
     }
 
     /**
