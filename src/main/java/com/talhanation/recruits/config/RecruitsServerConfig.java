@@ -307,10 +307,10 @@ public class RecruitsServerConfig {
                         Should ranged units need arrows to shoot?
                         If enabled ranged units will resupply arrows from upkeep chest and spawn with arrows.
                         ""
-                        default: false""")
+                        default: true""")
 
                 .worldRestart()
-                .define("RangedRecruitsNeedArrowsToShoot", false);
+                .define("RangedRecruitsNeedArrowsToShoot", true);
 
         RecruitsChunkLoading = BUILDER.comment("""
                         RecruitsChunkLoading

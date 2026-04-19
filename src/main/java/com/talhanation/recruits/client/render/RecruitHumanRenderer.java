@@ -1,4 +1,5 @@
 package com.talhanation.recruits.client.render;
+
 import com.mojang.blaze3d.vertex.PoseStack;
 import com.talhanation.recruits.Main;
 import com.talhanation.recruits.client.render.layer.RecruitHumanBiomeLayer;
@@ -94,7 +95,7 @@ public class RecruitHumanRenderer extends MobRenderer<AbstractRecruitEntity, Hum
             return HumanoidModel.ArmPose.EMPTY;
         }
 
-        // Check for JEG/Musket weapons — driven by synched entity data, not vanilla item-use
+        // Check for JEG/Musket weapons - driven by synched entity data, not vanilla item-use
         if (recruit instanceof CrossBowmanEntity crossBowman) {
             boolean isMusket = IWeapon.isMusketModWeapon(itemstack);
             boolean isJEGGun = IWeapon.isJEGWeapon(itemstack);

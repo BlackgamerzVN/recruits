@@ -226,7 +226,7 @@ public class Main {
         isJEGLoaded = ModList.get().isLoaded("jeg");//Just Enough Guns
         boolean isMTEGLoaded = ModList.get().isLoaded("mteg");//Mo' Than Enough Guns
         
-        // Treat MTEG as JEG-compatible — same author, same internals
+        // Treat MTEG as JEG-compatible - same author, same internals
         if (!isJEGLoaded && isMTEGLoaded) {
             isJEGLoaded = true;
         }

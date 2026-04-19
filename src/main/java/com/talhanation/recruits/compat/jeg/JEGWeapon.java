@@ -199,43 +199,251 @@ public class JEGWeapon implements IWeapon {
      * Get reload time from JEG's actual weapon configuration (reflective).
      * Tries common method and field names, falls back to default.
      */
-    public int getWeaponLoadTime(ItemStack gunStack) {
-        if (gunStack.isEmpty()) {
+      public int getWeaponLoadTime(ItemStack gunStack) {
+        if (gunStack == null || gunStack.isEmpty()) {
             Main.LOGGER.warn("Cannot get reload time: empty ItemStack");
             return 60; // Fallback default
         }
 
-        Class<?> gunItemClass = findClass(IDX_GUN_ITEM);
-        if (gunItemClass != null && gunItemClass.isInstance(gunStack.getItem())) {
-            // Try common method names for reload/load time
-            for (String methodName : new String[]{"getLoadTime", "getReloadTime", "getFireRateDelay", "getWeaponLoadTime"}) {
-                try {
-                    Method method = gunItemClass.getMethod(methodName);
-                    int reloadTime = (int) method.invoke(gunStack.getItem());
-                    Main.LOGGER.info("JEG/MTEG reload time via {}(): {}", methodName, reloadTime);
-                    return reloadTime;
-                } catch (NoSuchMethodException ignored) {}
-                catch (Exception e) {
-                    Main.LOGGER.warn("Error invoking {}: {}", methodName, e.getMessage());
-                }
-            }
+        // Candidate method and field names to try (in order)
+        String[] candidateMethodNames = new String[]{
+            "getLoadTime", "getReloadTime", "getLoadTicks", "getLoadDuration", "getFireRateDelay", "getWeaponLoadTime"
+        };
+        String[] candidateFieldNames = new String[]{
+            "loadTime", "reloadTime", "load_ticks", "loadDuration", "fireRateDelay", "weaponLoadTime"
+        };
 
-            // Try field access on gunItem instance
-            for (String fieldName : new String[]{"loadTime", "reloadTime", "fireRateDelay", "weaponLoadTime"}) {
+        // Helper to convert an Object to int if it's numeric
+        java.util.function.Function<Object, Integer> toInt = (obj) -> {
+            if (obj == null) return null;
+            if (obj instanceof Number) return ((Number) obj).intValue();
+            try {
+                return Integer.parseInt(obj.toString());
+            } catch (Exception e) {
+                return null;
+            }
+        };
+
+        // 1) Try runtime Gun-based detection similar to getMagazineSize
+        try {
+            Class<?> gunItemClass = findClass(IDX_GUN_ITEM);
+            Object item = gunStack.getItem();
+            if (gunItemClass != null && gunItemClass.isInstance(item)) {
+                // try to call getGun() on the item to obtain the runtime Gun object
                 try {
-                    Field field = gunItemClass.getDeclaredField(fieldName);
-                    field.setAccessible(true);
-                    int reloadTime = (int) field.get(gunStack.getItem());
-                    Main.LOGGER.info("JEG/MTEG reload time via field {}: {}", fieldName, reloadTime);
-                    return reloadTime;
-                } catch (NoSuchFieldException ignored) {}
-                catch (Exception e) {
-                    Main.LOGGER.warn("Error reading field {}: {}", fieldName, e.getMessage());
+                    Method getGunMethod = gunItemClass.getMethod("getGun");
+                    Object gunObj = getGunMethod.invoke(item);
+                    if (gunObj != null) {
+                        // First: try methods on gunObj
+                        for (String mname : candidateMethodNames) {
+                            try {
+                                // try no-arg method
+                                Method m = gunObj.getClass().getMethod(mname);
+                                Object val = m.invoke(gunObj);
+                                Integer i = toInt.apply(val);
+                                if (i != null) {
+                                    Main.LOGGER.info("JEG/MTEG reload time via gun.{}(): {}", mname, i);
+                                    return i;
+                                }
+                            } catch (NoSuchMethodException ignored) {
+                                // try method accepting ItemStack
+                                try {
+                                    Method m2 = gunObj.getClass().getMethod(mname, ItemStack.class);
+                                    Object val = m2.invoke(gunObj, gunStack);
+                                    Integer i = toInt.apply(val);
+                                    if (i != null) {
+                                        Main.LOGGER.info("JEG/MTEG reload time via gun.{}(ItemStack): {}", mname, i);
+                                        return i;
+                                    }
+                                } catch (NoSuchMethodException ignored2) {}
+                            } catch (Exception e) {
+                                Main.LOGGER.debug("Error invoking gun.{}(): {}", mname, e.getMessage());
+                            }
+                        }
+
+                        // Next: try reloads object from gunObj (getReloads() or field "reloads")
+                        try {
+                            Method getReloads = gunObj.getClass().getMethod("getReloads");
+                            Object reloads = getReloads.invoke(gunObj);
+                            if (reloads != null) {
+                                for (String mname : candidateMethodNames) {
+                                    try {
+                                        Method m = reloads.getClass().getMethod(mname);
+                                        Object val = m.invoke(reloads);
+                                        Integer i = toInt.apply(val);
+                                        if (i != null) {
+                                            Main.LOGGER.info("JEG/MTEG reload time via gun.getReloads().{}(): {}", mname, i);
+                                            return i;
+                                        }
+                                    } catch (NoSuchMethodException ignored) {
+                                        // try field fallback
+                                    } catch (Exception e) {
+                                        Main.LOGGER.debug("Error invoking reloads.{}(): {}", mname, e.getMessage());
+                                    }
+                                }
+                                // try fields on reloads
+                                for (String fname : candidateFieldNames) {
+                                    try {
+                                        Field f = reloads.getClass().getDeclaredField(fname);
+                                        f.setAccessible(true);
+                                        Object val = f.get(reloads);
+                                        Integer i = toInt.apply(val);
+                                        if (i != null) {
+                                            Main.LOGGER.info("JEG/MTEG reload time via reloads.{}: {}", fname, i);
+                                            return i;
+                                        }
+                                    } catch (NoSuchFieldException ignored) {}
+                                    catch (Exception e) {
+                                        Main.LOGGER.debug("Error reading reloads.{}: {}", fname, e.getMessage());
+                                    }
+                                }
+                            }
+                        } catch (NoSuchMethodException nsme) {
+                            // try reloads field directly on gunObj
+                            try {
+                                Field reloadsField = gunObj.getClass().getDeclaredField("reloads");
+                                reloadsField.setAccessible(true);
+                                Object reloads = reloadsField.get(gunObj);
+                                if (reloads != null) {
+                                    for (String mname : candidateMethodNames) {
+                                        try {
+                                            Method m = reloads.getClass().getMethod(mname);
+                                            Object val = m.invoke(reloads);
+                                            Integer i = toInt.apply(val);
+                                            if (i != null) {
+                                                Main.LOGGER.info("JEG/MTEG reload time via gun.reloads.{}(): {}", mname, i);
+                                                return i;
+                                            }
+                                        } catch (NoSuchMethodException ignored) {}
+                                        catch (Exception e) {
+                                            Main.LOGGER.debug("Error invoking gun.reloads.{}(): {}", mname, e.getMessage());
+                                        }
+                                    }
+                                    // fields on reloads
+                                    for (String fname : candidateFieldNames) {
+                                        try {
+                                            Field f = reloads.getClass().getDeclaredField(fname);
+                                            f.setAccessible(true);
+                                            Object val = f.get(reloads);
+                                            Integer i = toInt.apply(val);
+                                            if (i != null) {
+                                                Main.LOGGER.info("JEG/MTEG reload time via gun.reloads.{}: {}", fname, i);
+                                                return i;
+                                            }
+                                        } catch (NoSuchFieldException ignored) {}
+                                        catch (Exception e) {
+                                            Main.LOGGER.debug("Error reading gun.reloads.{}: {}", fname, e.getMessage());
+                                        }
+                                    }
+                                }
+                            } catch (NoSuchFieldException | IllegalAccessException ignored) {}
+                        }
+                    }
+                } catch (NoSuchMethodException ignored) {
+                    // getGun() not available on this gunItemClass
+                } catch (Exception e) {
+                    Main.LOGGER.debug("Error when inspecting gun object for reload time: {}", e.getMessage());
+                }
+
+                // If we reach here, try methods/fields directly on the gun Item instance as before,
+                // but try also methods that accept ItemStack.
+                try {
+                    for (String methodName : candidateMethodNames) {
+                        try {
+                            Method m = gunItemClass.getMethod(methodName);
+                            Object val = m.invoke(item);
+                            Integer i = toInt.apply(val);
+                            if (i != null) {
+                                Main.LOGGER.info("JEG/MTEG reload time via item.{}(): {}", methodName, i);
+                                return i;
+                            }
+                        } catch (NoSuchMethodException ignored) {
+                            try {
+                                Method m2 = gunItemClass.getMethod(methodName, ItemStack.class);
+                                Object val = m2.invoke(item, gunStack);
+                                Integer i = toInt.apply(val);
+                                if (i != null) {
+                                    Main.LOGGER.info("JEG/MTEG reload time via item.{}(ItemStack): {}", methodName, i);
+                                    return i;
+                                }
+                            } catch (NoSuchMethodException ignored2) {}
+                        } catch (Exception e) {
+                            Main.LOGGER.debug("Error invoking item.{}(): {}", methodName, e.getMessage());
+                        }
+                    }
+
+                    for (String fieldName : candidateFieldNames) {
+                        try {
+                            Field f = gunItemClass.getDeclaredField(fieldName);
+                            f.setAccessible(true);
+                            Object val = f.get(item);
+                            Integer i = toInt.apply(val);
+                            if (i != null) {
+                                Main.LOGGER.info("JEG/MTEG reload time via item.{}: {}", fieldName, i);
+                                return i;
+                            }
+                        } catch (NoSuchFieldException ignored) {}
+                        catch (Exception e) {
+                            Main.LOGGER.debug("Error reading item.{}: {}", fieldName, e.getMessage());
+                        }
+                    }
+                } catch (Exception e) {
+                    Main.LOGGER.debug("Error inspecting gun item for reload time: {}", e.getMessage());
                 }
             }
+        } catch (Exception e) {
+            Main.LOGGER.debug("Top-level gun item inspection failed: {}", e.getMessage());
         }
 
-        // Fallback
+        // 2) If we didn't find anything via the expected gunItemClass path, try to inspect the concrete item's class
+        try {
+            Class<?> itemClass = gunStack.getItem().getClass();
+            // Try methods on the concrete class (no param and ItemStack param)
+            for (String methodName : candidateMethodNames) {
+                try {
+                    Method m = itemClass.getMethod(methodName);
+                    Object val = m.invoke(gunStack.getItem());
+                    Integer i = toInt.apply(val);
+                    if (i != null) {
+                        Main.LOGGER.info("JEG/MTEG reload time via concreteItem.{}(): {}", methodName, i);
+                        return i;
+                    }
+                } catch (NoSuchMethodException ignored) {
+                    try {
+                        Method m2 = itemClass.getMethod(methodName, ItemStack.class);
+                        Object val = m2.invoke(gunStack.getItem(), gunStack);
+                        Integer i = toInt.apply(val);
+                        if (i != null) {
+                            Main.LOGGER.info("JEG/MTEG reload time via concreteItem.{}(ItemStack): {}", methodName, i);
+                            return i;
+                        }
+                    } catch (NoSuchMethodException ignored2) {}
+                } catch (Exception e) {
+                    Main.LOGGER.debug("Error invoking concrete item method {}: {}", methodName, e.getMessage());
+                }
+            }
+
+            // try fields on concrete class
+            for (String fieldName : candidateFieldNames) {
+                try {
+                    Field f = itemClass.getDeclaredField(fieldName);
+                    f.setAccessible(true);
+                    Object val = f.get(gunStack.getItem());
+                    Integer i = toInt.apply(val);
+                    if (i != null) {
+                        Main.LOGGER.info("JEG/MTEG reload time via concreteItem.{}: {}", fieldName, i);
+                        return i;
+                    }
+                } catch (NoSuchFieldException ignored) {}
+                catch (Exception e) {
+                    Main.LOGGER.debug("Error reading concrete item field {}: {}", fieldName, e.getMessage());
+                }
+            }
+        } catch (Exception e) {
+            Main.LOGGER.debug("Concrete item inspection failed: {}", e.getMessage());
+        }
+
+        // 3) Fallback based on gun type as before
         String gunType = detectGunType(gunStack);
         int fallbackReloadTime = switch (gunType) {
             case "RIFLE" -> 80;
@@ -783,11 +991,6 @@ public class JEGWeapon implements IWeapon {
         return false;
     }
 
-    // performRangedAttackIWeapon and predictTargetPosition remain unchanged from original implementation but
-    // will use the normalized ammo helpers internally (readAmmoNormalized/writeAmmoNormalized).
-    // For brevity, I left those original methods in place; if your current file cut them off,
-    // copy the existing performRangedAttackIWeapon(...) from your current file into this class.
-
     @Override
     public void performRangedAttackIWeapon(AbstractRecruitEntity shooter, double x, double y, double z, float projectileSpeed) {
         AbstractHurtingProjectile projectileEntity = this.getProjectile(shooter);
@@ -808,11 +1011,39 @@ public class JEGWeapon implements IWeapon {
 
         // Decrement ammo (normalized) and damage the held item
         ItemStack mainHand = shooter.getMainHandItem();
+
         try {
-            // If the server config requires explicit ammo consumption, use normalized setter
-            if (RecruitsServerConfig.RangedRecruitsNeedArrowsToShoot.get()) {
-                this.setLoaded(mainHand, false); // setLoaded(false) reduces ammo by 1 in JEGWeapon
+            boolean ammoRequired = RecruitsServerConfig.RangedRecruitsNeedArrowsToShoot.get();
+
+            Main.LOGGER.info("[RELOAD_DEBUG] performRangedAttackIWeapon called - shooter={}, owner={}",
+                shooter.getUUID(),
+                shooter.getOwner() == null ? "null" : shooter.getOwner().getClass().getSimpleName() + "/" + shooter.getOwner().getName().getString()
+            );
+
+            // Per-entity override and owner-based rule
+            try {
+                if (shooter.getPersistentData().getBoolean("recruits:infinite_ammo")) {
+                    ammoRequired = false;
+                } else {
+                    net.minecraft.world.entity.Entity owner = shooter.getOwner();
+                    if (owner == null || !(owner instanceof net.minecraft.world.entity.player.Player)) {
+                        ammoRequired = false;
+                    }
+                }
+            } catch (Exception e) {
+                // If persistent data or owner check throws, log and fall back to global config
+                Main.LOGGER.debug("Error checking recruit infinite_ammo/owner: {}", e.getMessage());
             }
+
+            Main.LOGGER.debug("JEGWeapon ammoRequired={} for shooter={} owner={}",
+                ammoRequired,
+                shooter.getName().getString(),
+                shooter.getOwner() == null ? "null" : shooter.getOwner().getClass().getName());
+
+            if (ammoRequired && mainHand != null && !mainHand.isEmpty()) {
+                this.setLoaded(mainHand, false); // decrement ammo
+            }
+
         } catch (Exception e) {
             Main.LOGGER.warn("Failed to decrement JEG/MTEG ammo: {}", e.getMessage());
         }

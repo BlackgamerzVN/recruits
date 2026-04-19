@@ -18,15 +18,11 @@ import java.util.EnumSet;
 /**
  * AI Goal for recruits using JEG (JustEnoughGuns) weapons.
  * Respects JEG's native reload tracking system using NBT tags (Ammo, MaxAmmo).
- * Implements premature reload when magazine isn't full and ammo is available.
  */
 public class RecruitRangedGunnerAttackGoal extends Goal {
     private final CrossBowmanEntity recruit;
     private final double stopRange;
     private final CombatController combatController;
-    
-    // Reload threshold: reload when magazine falls below this percentage of capacity
-    private static final float PREMATURE_RELOAD_THRESHOLD = 0.5F; // 50% of magazine
     
     private LivingEntity target;
     private JEGWeapon weapon;
@@ -212,19 +208,17 @@ public class RecruitRangedGunnerAttackGoal extends Goal {
         int currentAmmo = getJEGCurrentAmmo();
         int capacity = getJEGMagazineCapacity();
         
-        // Check for premature reload first (when idle and magazine not full)
-        if (shouldPrematurelyReload()) {
-            Main.LOGGER.info("PREMATURE RELOAD TRIGGERED (IDLE) - current: {}, threshold: {}", 
-                getJEGCurrentAmmo(), (int)(getJEGMagazineCapacity() * PREMATURE_RELOAD_THRESHOLD));
+        // Only trigger reload when magazine is empty AND we have ammo in inventory.
+        if (currentAmmo == 0 && hasJEGInventoryAmmo()) {
             state = CombatState.RELOAD;
             return;
         }
         
-        // Magazine not full AND inventory has ammo - always reload first
-        if (currentAmmo < capacity && hasJEGInventoryAmmo()) {
-            state = CombatState.RELOAD;
-        } else if (currentAmmo > 0) {
+        // Proceed to aiming if we have ammo, otherwise stay idle.
+        if (currentAmmo > 0) {
             state = hasTarget && target != null && target.isAlive() ? CombatState.AIMING : CombatState.IDLE;
+        } else {
+            state = CombatState.IDLE;
         }
     }
 
@@ -242,7 +236,7 @@ public class RecruitRangedGunnerAttackGoal extends Goal {
             ItemStack mainHand = recruit.getMainHandItem();
 
             // Respect the server config: if ammo consumption is disabled, just fill magazine
-            if (!RecruitsServerConfig.RangedRecruitsNeedArrowsToShoot.get()) {
+            if (!RecruitsServerConfig.RangedRecruitsNeedArrowsToShoot.get() || recruitHasInfiniteAmmo()) {
                 int magSize = getJEGMagazineCapacity();
                 JEGWeapon.writeAmmoNormalized(mainHand, magSize);
                 mainHand.getOrCreateTag().putInt("MaxAmmo", magSize);
@@ -346,8 +340,9 @@ public class RecruitRangedGunnerAttackGoal extends Goal {
         int remainingAmmo = getJEGCurrentAmmo();
         int capacity = getJEGMagazineCapacity();
         
-        if (remainingAmmo < capacity && hasJEGInventoryAmmo()) {
-            Main.LOGGER.info("After shot: ammo ({}) < capacity ({}), transitioning to RELOAD", remainingAmmo, capacity);
+        // Only reload if magazine is completely empty and ammo present in inventory.
+        if (remainingAmmo == 0 && hasJEGInventoryAmmo()) {
+            Main.LOGGER.info("After shot: magazine empty, transitioning to RELOAD");
             state = CombatState.RELOAD;
         } else if (remainingAmmo > 0) {
             Main.LOGGER.info("After shot: ammo ({}) still available, transitioning to AIMING", remainingAmmo);
@@ -389,8 +384,9 @@ public class RecruitRangedGunnerAttackGoal extends Goal {
         int remainingAmmo = getJEGCurrentAmmo();
         int capacity = getJEGMagazineCapacity();
         
-        if (remainingAmmo < capacity && hasJEGInventoryAmmo()) {
-            Main.LOGGER.info("After strategic shot: ammo ({}) < capacity ({}), transitioning to RELOAD", remainingAmmo, capacity);
+        // Only reload if magazine is completely empty and ammo present in inventory.
+        if (remainingAmmo == 0 && hasJEGInventoryAmmo()) {
+            Main.LOGGER.info("After strategic shot: magazine empty, transitioning to RELOAD");
             state = CombatState.RELOAD;
         } else if (remainingAmmo > 0) {
             Main.LOGGER.info("After strategic shot: ammo ({}) still available, transitioning to AIMING", remainingAmmo);
@@ -399,97 +395,6 @@ public class RecruitRangedGunnerAttackGoal extends Goal {
             Main.LOGGER.info("After strategic shot: no ammo left ({}), transitioning to IDLE", remainingAmmo);
             state = CombatState.IDLE;
         }
-    }
-
-    /**
-     * Perform reload: consume ammo from inventory and add to magazine.
-     */
-    private void performJEGReload() {
-        ItemStack mainHand = recruit.getMainHandItem();
-        int currentAmmo = getJEGCurrentAmmo();
-        int capacity = getJEGMagazineCapacity();
-        int needed = capacity - currentAmmo;
-        
-        Main.LOGGER.info("=== RELOAD START === Current: {}, Capacity: {}, Needed: {}", 
-            currentAmmo, capacity, needed);
-        
-        if (needed <= 0) {
-            Main.LOGGER.warn("Magazine already full or no capacity increase needed");
-            return;
-        }
-        
-        int consumed = 0;
-        
-        Main.LOGGER.info("Searching inventory slots 6 to {}", recruit.getInventory().items.size());
-        
-        // Start from slot 6 to skip armor/equipment slots
-        for (int i = 6; i < recruit.getInventory().items.size() && consumed < needed; i++) {
-            ItemStack stack = recruit.getInventory().items.get(i);
-            
-            Main.LOGGER.info("Slot {}: {} (count: {})", i, 
-                stack.isEmpty() ? "EMPTY" : stack.getDescriptionId(), 
-                stack.getCount());
-            
-            if (stack.isEmpty()) continue;
-            
-            if (isValidAmmo(stack)) {
-                int toConsume = Math.min(stack.getCount(), needed - consumed);
-                stack.shrink(toConsume);
-                consumed += toConsume;
-                
-                Main.LOGGER.info("[OK] CONSUMED {} ammo from slot {}, {} remaining in stack", 
-                    toConsume, i, stack.getCount());
-            } else {
-                Main.LOGGER.debug("[SKIP] Not ammo for current gun: {}", stack.getDescriptionId());
-            }
-        }
-        
-        Main.LOGGER.info("Total consumed from inventory: {}", consumed);
-        
-        if (consumed > 0) {
-            int newAmount = currentAmmo + consumed;
-            JEGWeapon.writeAmmoNormalized(mainHand, newAmount);
-            mainHand.getOrCreateTag().putInt("MaxAmmo", capacity);
-            Main.LOGGER.info("[SUCCESS] Reload SUCCESSFUL: consumed {} ammo, magazine now: {}/{}",
-                consumed, newAmount, capacity);
-        } else {
-            Main.LOGGER.warn("[FAILED] Reload FAILED: no valid ammo found in inventory");
-            Main.LOGGER.warn("Checking ALL slots for debugging:");
-            for (int i = 0; i < recruit.getInventory().items.size(); i++) {
-                ItemStack stack = recruit.getInventory().items.get(i);
-                if (!stack.isEmpty()) {
-                    Main.LOGGER.warn("  Slot {}: {} (count: {})", i, stack.getDescriptionId(), stack.getCount());
-                }
-            }
-        }
-    }
-
-    /**
-     * Determine if NPC should reload prematurely.
-     * Returns true if:
-     * - Magazine is below threshold percentage OR
-     * - Magazine is empty
-     * AND ammo is available in inventory
-     */
-    private boolean shouldPrematurelyReload() {
-        int currentAmmo = getJEGCurrentAmmo();
-        int capacity = getJEGMagazineCapacity();
-        
-        // Already has full magazine
-        if (currentAmmo >= capacity) {
-            return false;
-        }
-        
-        // Inventory has no ammo to reload
-        if (!hasJEGInventoryAmmo()) {
-            return false;
-        }
-        
-        // Calculate threshold: reload when magazine falls below this amount
-        int thresholdAmmo = Math.max(1, (int) (capacity * PREMATURE_RELOAD_THRESHOLD));
-        
-        // Reload if empty OR below threshold
-        return currentAmmo == 0 || currentAmmo <= thresholdAmmo;
     }
 
     /**
@@ -522,7 +427,7 @@ public class RecruitRangedGunnerAttackGoal extends Goal {
      */
     private boolean hasJEGInventoryAmmo() {
         // If config says ammo not needed, always return true (infinite ammo)
-        if (!RecruitsServerConfig.RangedRecruitsNeedArrowsToShoot.get()) {
+        if (!RecruitsServerConfig.RangedRecruitsNeedArrowsToShoot.get() || recruitHasInfiniteAmmo()) {
             return true;
         }
         
@@ -574,6 +479,25 @@ public class RecruitRangedGunnerAttackGoal extends Goal {
         }
         return isValid;
     }
+
+    // Return true if this recruit should be treated as having infinite ammo.
+    // Infinite if:
+    //  - explicit persistent NBT flag "recruits:infinite_ammo" is true OR
+    //  - the recruit is not owned by a player (owner == null || owner is not a Player)
+    private boolean recruitHasInfiniteAmmo() {
+    try {
+        boolean nbtFlag = recruit.getPersistentData().getBoolean("recruits:infinite_ammo");
+        LivingEntity owner = recruit.getOwner();
+        String ownerInfo = (owner == null) ? "null" : owner.getClass().getSimpleName() + "/" + owner.getName().getString();
+        Main.LOGGER.info("[RELOAD_DEBUG] recruitHasInfiniteAmmo: recruit={}, NBT={}, owner={}",
+            recruit.getUUID(), nbtFlag, ownerInfo);
+        if (nbtFlag) return true;
+        return owner == null || !(owner instanceof net.minecraft.world.entity.player.Player);
+    } catch (Exception e) {
+        Main.LOGGER.warn("[RELOAD_DEBUG] recruitHasInfiniteAmmo exception: {}", e.getMessage());
+        return false;
+    }
+}
 
     private boolean ensureJEGWeapon() {
         ItemStack mainHand = recruit.getMainHandItem();
