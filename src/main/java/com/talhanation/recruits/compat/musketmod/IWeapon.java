@@ -1,4 +1,5 @@
 package com.talhanation.recruits.compat.musketmod;
+
 import com.talhanation.recruits.entities.AbstractRecruitEntity;
 import net.minecraft.sounds.SoundEvent;
 import net.minecraft.world.entity.LivingEntity;
@@ -34,6 +35,11 @@ public interface IWeapon {
                 stack.getDescriptionId().equals("item.musketmod.blunderbuss") ||
                 stack.getDescriptionId().equals("item.musketmod.cartridge") ||
                 stack.getDescriptionId().equals("item.musketmod.pistol");
+    }
+
+    static boolean isJEGWeapon(ItemStack stack) {
+        String id = stack.getDescriptionId();
+        return id.startsWith("item.jeg.") || id.startsWith("item.mteg.");
     }
 
     boolean isLoaded(ItemStack stack);

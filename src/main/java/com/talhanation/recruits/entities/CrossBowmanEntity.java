@@ -1,10 +1,12 @@
 package com.talhanation.recruits.entities;
 
+import com.talhanation.recruits.Main;
 import com.talhanation.recruits.compat.musketmod.IWeapon;
 import com.talhanation.recruits.config.RecruitsServerConfig;
 import com.talhanation.recruits.entities.ai.RecruitMoveTowardsTargetGoal;
 import com.talhanation.recruits.entities.ai.RecruitRangedCrossbowAttackGoal;
 import com.talhanation.recruits.entities.ai.compat.RecruitRangedMusketAttackGoal;
+import com.talhanation.recruits.entities.ai.compat.RecruitRangedGunnerAttackGoal;
 import com.talhanation.recruits.world.RecruitsPatrolSpawn;
 import com.talhanation.recruits.pathfinding.AsyncGroundPathNavigation;
 import net.minecraft.core.BlockPos;
@@ -36,6 +38,7 @@ import java.util.Optional;
 import java.util.function.Predicate;
 
 import static com.talhanation.recruits.Main.isMusketModLoaded;
+import static com.talhanation.recruits.Main.isJEGLoaded;
 
 
 public class CrossBowmanEntity extends AbstractRecruitEntity implements CrossbowAttackMob, IRangedRecruit, IStrategicFire {
@@ -92,10 +95,20 @@ public class CrossBowmanEntity extends AbstractRecruitEntity implements Crossbow
     @Override
     protected void registerGoals() {
         super.registerGoals();
-        if(isMusketModLoaded){
+        
+        // JEG/MTEG weapons take highest priority when loaded
+        if(isJEGLoaded){
+            this.goalSelector.addGoal(0, new RecruitRangedGunnerAttackGoal(this, this.getMeleeStartRange()));
+        }
+        // Musket mod second priority
+        else if(isMusketModLoaded){
             this.goalSelector.addGoal(0, new RecruitRangedMusketAttackGoal(this, this.getMeleeStartRange()));
         }
-        this.goalSelector.addGoal(0, new RecruitRangedCrossbowAttackGoal(this, this.getMeleeStartRange()));
+        // Vanilla crossbow as fallback
+        else {
+            this.goalSelector.addGoal(0, new RecruitRangedCrossbowAttackGoal(this, this.getMeleeStartRange()));
+        }
+        
         this.goalSelector.addGoal(8, new RecruitMoveTowardsTargetGoal(this, 1.15D, (float) this.getMeleeStartRange()));
     }
 
@@ -133,20 +146,45 @@ public class CrossBowmanEntity extends AbstractRecruitEntity implements Crossbow
         this.setPersistenceRequired();
 
         if(RecruitsServerConfig.RangedRecruitsNeedArrowsToShoot.get()){
-            if(isMusketModLoaded && IWeapon.isMusketModWeapon(this.getMainHandItem())){
+            // JEG weapon ammo
+            if(isJEGLoaded && IWeapon.isJEGWeapon(this.getMainHandItem())){
+                String weaponId = this.getMainHandItem().getDescriptionId();
+                String ammoType = "item.jeg.rifle_ammo"; // default
+                
+                if(weaponId.contains("pistol")) ammoType = "item.jeg.pistol_ammo";
+                else if(weaponId.contains("shotgun")) ammoType = "item.jeg.shotgun_shell";
+                else if(weaponId.contains("rifle")) ammoType = "item.jeg.rifle_ammo";
+                
+                try {
+                    ItemStack ammo = ForgeRegistries.ITEMS.getDelegateOrThrow(ResourceLocation.tryParse(ammoType.replace("item.jeg.", "jeg:"))).get().getDefaultInstance();
+                    ammo.setCount(64 + this.getRandom().nextInt(64));
+                    this.inventory.setItem(6, ammo);
+                    Main.LOGGER.info("Spawned crossbowman with " + ammo.getCount() + "x " + ammoType);
+                } catch (Exception e) {
+                    Main.LOGGER.error("Failed to give JEG ammo: " + e.getMessage());
+                }
+            }
+            // Musket mod ammo
+            else if(isMusketModLoaded && IWeapon.isMusketModWeapon(this.getMainHandItem())){
                 int i = this.getRandom().nextInt(32);
                 ItemStack arrows = ForgeRegistries.ITEMS.getDelegateOrThrow(ResourceLocation.tryParse("musketmod:cartridge")).get().getDefaultInstance();
                 arrows.setCount(14 + i);
                 this.inventory.setItem(6, arrows);
             }
+            // Regular arrows
             else RecruitsPatrolSpawn.setRangedArrows(this);
-        }
+        } // ADD THIS CLOSING BRACE
 
         AbstractRecruitEntity.applySpawnValues(this);
     }
 
     @Override
     public boolean canHoldItem(ItemStack itemStack){
+        // Allow JEG weapons
+        if (IWeapon.isJEGWeapon(itemStack)) {
+            return true;
+        }
+        
         return !(itemStack.getItem() instanceof SwordItem || itemStack.getItem() instanceof ShieldItem) || itemStack.getItem() instanceof CrossbowItem;
     }
     public void performRangedAttack(@NotNull LivingEntity target, float v) {
@@ -154,6 +192,22 @@ public class CrossBowmanEntity extends AbstractRecruitEntity implements Crossbow
     }
     @Override
     public boolean wantsToPickUp(@NotNull ItemStack itemStack) {
+        // JEG bullets
+        if(isJEGLoaded) {
+            String desc = itemStack.getDescriptionId();
+            if (desc.startsWith("item.jeg.") && 
+                (desc.contains("ammo") || desc.contains("shell") || desc.contains("round"))) {
+                Main.LOGGER.info("Found JEG ammo to pickup: " + desc);
+                return true;
+            }
+        }
+        
+        // JEG weapons
+        if(IWeapon.isJEGWeapon(itemStack)) {
+            Main.LOGGER.info("Found JEG weapon to pickup: " + itemStack.getDescriptionId());
+            return true;
+        }
+        
         if(isMusketModLoaded && IWeapon.isMusketModWeapon(itemStack)) return true;
         else if ((itemStack.getItem() instanceof BowItem || itemStack.getItem() instanceof ProjectileWeaponItem || itemStack.getItem() instanceof SwordItem) && this.getMainHandItem().isEmpty()){
             return !hasSameTypeOfItem(itemStack);
@@ -180,7 +234,7 @@ public class CrossBowmanEntity extends AbstractRecruitEntity implements Crossbow
         this.shootCrossbowProjectile(this, target, projectile, f, 1.6F);
     }
 
-    private boolean getChargingCrossbow() {
+    public boolean getChargingCrossbow() { // CHANGED FROM private TO public
         return this.entityData.get(DATA_IS_CHARGING_CROSSBOW);
     }
 

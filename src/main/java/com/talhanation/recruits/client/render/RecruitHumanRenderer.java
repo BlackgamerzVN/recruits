@@ -89,40 +89,39 @@ public class RecruitHumanRenderer extends MobRenderer<AbstractRecruitEntity, Hum
 
     private static HumanoidModel.ArmPose getArmPose(AbstractRecruitEntity recruit, InteractionHand hand) {
         ItemStack itemstack = recruit.getItemInHand(hand);
-        boolean isMusket = IWeapon.isMusketModWeapon(itemstack) && (recruit instanceof CrossBowmanEntity crossBowman)  && crossBowman.isAggressive();
+        
         if (itemstack.isEmpty()) {
             return HumanoidModel.ArmPose.EMPTY;
-        } else {
-            if (recruit.getUsedItemHand() == hand && recruit.getUseItemRemainingTicks() > 0) {
-                UseAnim useanim = itemstack.getUseAnimation();
-                if (useanim == UseAnim.BLOCK) {
-                    return HumanoidModel.ArmPose.BLOCK;
-                }
+        }
 
-                if (useanim == UseAnim.BOW) {
-                    return HumanoidModel.ArmPose.BOW_AND_ARROW;
-                }
+        // Check for JEG/Musket weapons — driven by synched entity data, not vanilla item-use
+        if (recruit instanceof CrossBowmanEntity crossBowman) {
+            boolean isMusket = IWeapon.isMusketModWeapon(itemstack);
+            boolean isJEGGun = IWeapon.isJEGWeapon(itemstack);
 
-                if (useanim == UseAnim.SPEAR) {
-                    return HumanoidModel.ArmPose.THROW_SPEAR;
-                }
-
-                if (useanim == UseAnim.CROSSBOW && hand == recruit.getUsedItemHand() || isMusket) {
+            if (isMusket || isJEGGun) {
+                if (crossBowman.getChargingCrossbow()) {
                     return HumanoidModel.ArmPose.CROSSBOW_CHARGE;
                 }
-
-                if (useanim == UseAnim.SPYGLASS) {
-                    return HumanoidModel.ArmPose.SPYGLASS;
+                if (crossBowman.isAggressive()) {
+                    return HumanoidModel.ArmPose.CROSSBOW_HOLD;
                 }
-            } else if (!recruit.swinging && itemstack.is(Items.CROSSBOW) && CrossbowItem.isCharged(itemstack) || isMusket) {
-                return HumanoidModel.ArmPose.CROSSBOW_HOLD;
             }
-
-            HumanoidModel.ArmPose forgeArmPose = net.minecraftforge.client.extensions.common.IClientItemExtensions.of(itemstack).getArmPose(recruit, hand, itemstack);
-            if (forgeArmPose != null) return forgeArmPose;
-
-            return HumanoidModel.ArmPose.ITEM;
         }
+
+        if (recruit.getUsedItemHand() == hand && recruit.getUseItemRemainingTicks() > 0) {
+            UseAnim useanim = itemstack.getUseAnimation();
+
+            if (useanim == UseAnim.BLOCK) return HumanoidModel.ArmPose.BLOCK;
+            if (useanim == UseAnim.BOW) return HumanoidModel.ArmPose.BOW_AND_ARROW;
+            if (useanim == UseAnim.SPEAR) return HumanoidModel.ArmPose.THROW_SPEAR;
+            if (useanim == UseAnim.CROSSBOW && hand == recruit.getUsedItemHand()) return HumanoidModel.ArmPose.CROSSBOW_CHARGE;
+            if (useanim == UseAnim.SPYGLASS) return HumanoidModel.ArmPose.SPYGLASS;
+        } else if (!recruit.swinging && itemstack.is(Items.CROSSBOW) && CrossbowItem.isCharged(itemstack)) {
+            return HumanoidModel.ArmPose.CROSSBOW_HOLD;
+        }
+
+        return HumanoidModel.ArmPose.ITEM;
     }
 
 }

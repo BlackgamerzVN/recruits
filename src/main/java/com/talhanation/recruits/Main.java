@@ -51,6 +51,7 @@ public class Main {
     public static boolean isEpicKnightsLoaded;
     public static boolean isCorpseLoaded;
     public static boolean isRPGZLoaded;
+    public static boolean isJEGLoaded;
 
     public Main() {
         final IEventBus modEventBus = FMLJavaModLoadingContext.get().getModEventBus();
@@ -222,6 +223,15 @@ public class Main {
         isRPGZLoaded = ModList.get().isLoaded("rpgz");//rpgz mod
         isCorpseLoaded = ModList.get().isLoaded("corpse");//corpse mod
         isEpicKnightsLoaded = ModList.get().isLoaded("magistuarmory");//epic knights mod
+        isJEGLoaded = ModList.get().isLoaded("jeg");//Just Enough Guns
+        boolean isMTEGLoaded = ModList.get().isLoaded("mteg");//Mo' Than Enough Guns
+        
+        // Treat MTEG as JEG-compatible — same author, same internals
+        if (!isJEGLoaded && isMTEGLoaded) {
+            isJEGLoaded = true;
+        }
+        
+        LOGGER.info("JEG Mod loaded: " + isJEGLoaded + ", MTEG Mod loaded: " + isMTEGLoaded);
 
         isSmallShipsCompatible = false;
         if(isSmallShipsLoaded){
