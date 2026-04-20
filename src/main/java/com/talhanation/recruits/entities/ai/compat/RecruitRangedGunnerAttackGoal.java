@@ -13,6 +13,9 @@ import net.minecraft.world.item.ItemStack;
 import net.minecraft.world.phys.Vec3;
 import org.jetbrains.annotations.NotNull;
 
+import net.minecraft.resources.ResourceLocation;
+import net.minecraftforge.registries.ForgeRegistries;
+
 import java.util.EnumSet;
 
 /**
@@ -426,32 +429,43 @@ public class RecruitRangedGunnerAttackGoal extends Goal {
      * Respects RangedRecruitsNeedArrowsToShoot config.
      */
     private boolean hasJEGInventoryAmmo() {
-        // If config says ammo not needed, always return true (infinite ammo)
         if (!RecruitsServerConfig.RangedRecruitsNeedArrowsToShoot.get() || recruitHasInfiniteAmmo()) {
             return true;
         }
-        
         net.minecraft.world.Container inventory = recruit.getInventory();
-        
         if (inventory == null) {
             Main.LOGGER.warn("Could not get inventory to check for ammo");
             return false;
         }
-        
-        // Scan inventory using gun-type-specific validation
+        ItemStack mainHand = recruit.getMainHandItem();
+        String projectileItemId = JEGWeapon.getProjectileItemId(mainHand);
+
+        boolean fallbackAttempted = false;
+
         for (int i = 0; i < inventory.getContainerSize(); i++) {
             ItemStack stack = inventory.getItem(i);
             if (stack.isEmpty()) continue;
-            
-            if (isValidAmmo(stack)) {
-                Main.LOGGER.info("Found valid ammo for current gun: {}", 
-                    net.minecraftforge.registries.ForgeRegistries.ITEMS.getKey(stack.getItem()));
+
+            boolean matches = false;
+            if (projectileItemId != null) {
+                ResourceLocation key = ForgeRegistries.ITEMS.getKey(stack.getItem());
+                if (key != null && projectileItemId.equals(key.toString())) matches = true;
+            } else {
+                fallbackAttempted = true;
+                // String descId = stack.getDescriptionId().toLowerCase();
+                // matches = isValidAmmo(stack);
+            }
+
+            if (matches && projectileItemId != null) {
+                Main.LOGGER.info("[RELOAD_STRICT] Found STRICT ammo match for current gun: {}", stack.getDescriptionId());
                 return true;
             }
         }
-        
-        Main.LOGGER.warn("No valid JEG ammo found in inventory for gun type: {}", 
-            JEGWeapon.detectGunType(recruit.getMainHandItem()));
+        if (projectileItemId == null && fallbackAttempted) {
+            Main.LOGGER.warn("[RELOAD_STRICT] hasJEGInventoryAmmo(): Fallback name-based ammo check denied for gun '{}'. Correct ammo item type could not be determined!",
+                mainHand.getDisplayName().getString());
+        }
+        Main.LOGGER.warn("[RELOAD_STRICT] No strict ammo match found in recruit inventory for gun type: {}", JEGWeapon.detectGunType(mainHand));
         return false;
     }
 

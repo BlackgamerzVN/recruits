@@ -534,6 +534,54 @@ public class JEGWeapon implements IWeapon {
      * Consume ammo from inventory and add to magazine.
      * Tries to detect the projectile ammo item via GunItem.getGun()->projectile.item, otherwise falls back to description heuristics.
      */
+    // == Place inside your public class JEGWeapon ==
+
+    /** Strictly gets the gun's ammo (projectile) registry id using reflection. Fallback is null if undetectable. */
+    public static String getProjectileItemId(ItemStack mainHand) {
+        try {
+            Class<?> gunItemClass = findClass(IDX_GUN_ITEM);
+            if (gunItemClass != null && gunItemClass.isInstance(mainHand.getItem())) {
+                Method getGun = gunItemClass.getMethod("getGun");
+                Object gunObj = getGun.invoke(mainHand.getItem());
+                if (gunObj != null) {
+                    Method getProjectile = gunObj.getClass().getMethod("getProjectile");
+                    Object proj = getProjectile.invoke(gunObj);
+                    if (proj != null) {
+                        try {
+                            Method getItem = proj.getClass().getMethod("getItem");
+                            Object itemObj = getItem.invoke(proj);
+                            if (itemObj instanceof Item) {
+                                ResourceLocation key = ForgeRegistries.ITEMS.getKey((Item) itemObj);
+                                if (key != null) return key.toString();
+                            } else if (itemObj != null) {
+                                return itemObj.toString();
+                            }
+                        } catch (NoSuchMethodException nsme) {
+                            try {
+                                Field itemField = proj.getClass().getDeclaredField("item");
+                                itemField.setAccessible(true);
+                                Object itemObj = itemField.get(proj);
+                                if (itemObj instanceof Item) {
+                                    ResourceLocation key = ForgeRegistries.ITEMS.getKey((Item) itemObj);
+                                    if (key != null) return key.toString();
+                                } else if (itemObj != null) {
+                                    return itemObj.toString();
+                                }
+                            } catch (NoSuchFieldException | IllegalAccessException ignored) {}
+                        }
+                    }
+                }
+            }
+        } catch (Exception e) {
+            Main.LOGGER.debug("Could not detect projectile item id via Gun reflection: {}", e.getMessage());
+        }
+        return null;
+    }
+
+    /**
+     * STRICT: Only refill magazine if exact ammo match (no fallback).
+     * Logs a warning if fallback would have been used.
+     */
     public void consumeAmmoFromInventory(LivingEntity entity) {
         ItemStack mainHand = entity.getMainHandItem();
         int currentAmmo = readAmmoNormalized(mainHand);
@@ -551,59 +599,14 @@ public class JEGWeapon implements IWeapon {
         } else if (entity instanceof AbstractRecruitEntity recruit) {
             inventory = recruit.getInventory();
         }
-
         if (inventory == null) {
             Main.LOGGER.warn("Entity has no inventory");
             return;
         }
 
-        // Try to detect authoritative ammo item id from GunItem -> Gun -> Projectile.item
-        String projectileItemId = null;
-        try {
-            // Use reflection to extract item id
-            Class<?> gunItemClass = findClass(IDX_GUN_ITEM);
-            if (gunItemClass != null && gunItemClass.isInstance(mainHand.getItem())) {
-                Method getGun = gunItemClass.getMethod("getGun");
-                Object gunObj = getGun.invoke(mainHand.getItem());
-                if (gunObj != null) {
-                    Method getProjectile = gunObj.getClass().getMethod("getProjectile");
-                    Object proj = getProjectile.invoke(gunObj);
-                    if (proj != null) {
-                        // Try getItem() or item field
-                        try {
-                            Method getItem = proj.getClass().getMethod("getItem");
-                            Object itemObj = getItem.invoke(proj);
-                            if (itemObj != null) {
-                                if (itemObj instanceof Item) {
-                                    ResourceLocation key = ForgeRegistries.ITEMS.getKey((Item) itemObj);
-                                    if (key != null) projectileItemId = key.toString();
-                                } else {
-                                    projectileItemId = itemObj.toString();
-                                }
-                            }
-                        } catch (NoSuchMethodException nsme) {
-                            try {
-                                Field itemField = proj.getClass().getDeclaredField("item");
-                                itemField.setAccessible(true);
-                                Object itemObj = itemField.get(proj);
-                                if (itemObj instanceof Item) {
-                                    ResourceLocation key = ForgeRegistries.ITEMS.getKey((Item) itemObj);
-                                    if (key != null) projectileItemId = key.toString();
-                                } else if (itemObj != null) {
-                                    projectileItemId = itemObj.toString();
-                                }
-                            } catch (NoSuchFieldException | IllegalAccessException ignored) {}
-                        }
-                    }
-                }
-            }
-        } catch (Exception e) {
-            Main.LOGGER.debug("Could not detect projectile item id via Gun reflection: {}", e.getMessage());
-        }
-
+        String projectileItemId = getProjectileItemId(mainHand);
         int consumed = 0;
-        Main.LOGGER.info("JEG/MTEG consuming ammo - Current: {}, Needed: {}, Inventory Size: {}",
-            currentAmmo, needed, inventory.getContainerSize());
+        boolean fallbackAttempted = false;
 
         for (int i = 0; i < inventory.getContainerSize() && consumed < needed; i++) {
             ItemStack stack = inventory.getItem(i);
@@ -614,18 +617,20 @@ public class JEGWeapon implements IWeapon {
                 ResourceLocation key = ForgeRegistries.ITEMS.getKey(stack.getItem());
                 if (key != null && projectileItemId.equals(key.toString())) matches = true;
             } else {
-                // fallback to description string heuristics
-                String descId = stack.getDescriptionId().toLowerCase();
-                matches = isProbablyAmmoForGunByName(descId);
+                fallbackAttempted = true;
             }
 
-            if (matches) {
+            if (matches && projectileItemId != null) {
                 int toTake = Math.min(stack.getCount(), needed - consumed);
                 stack.shrink(toTake);
                 consumed += toTake;
-
                 Main.LOGGER.info("JEG/MTEG consumed {} from '{}' (slot {})", toTake, stack.getDescriptionId(), i);
             }
+        }
+
+        if (projectileItemId == null && fallbackAttempted) {
+            Main.LOGGER.warn("[RELOAD_STRICT] Fallback name-based ammo matching attempted and denied: could not determine the correct ammo type for the gun '{}'. Magazine not refilled!",
+                mainHand.getDisplayName().getString());
         }
 
         if (consumed > 0) {
@@ -635,24 +640,23 @@ public class JEGWeapon implements IWeapon {
             Main.LOGGER.info("JEG/MTEG reload: {}/{} + {} consumed = {}/{}",
                 currentAmmo, magSize, consumed, newAmount, magSize);
         } else {
-            // Do NOT refill magazine if no ammo was found!
             Main.LOGGER.warn("JEG/MTEG reload failed: no ammo found in inventory, magazine remains at {}/{}", currentAmmo, magSize);
         }
     }
 
-    private boolean isProbablyAmmoForGunByName(String lowerDesc) {
-        switch (this.gunItemName) {
-            case "RIFLE":
-                return lowerDesc.contains("rifle") || lowerDesc.contains("762") || lowerDesc.contains("556") || lowerDesc.contains("rifle_ammo");
-            case "PISTOL":
-            case "SMG":
-                return lowerDesc.contains("pistol") || lowerDesc.contains("9mm") || lowerDesc.contains("pistol_ammo");
-            case "SHOTGUN":
-                return lowerDesc.contains("shotgun") || lowerDesc.contains("shell") || lowerDesc.contains("handmade_shell");
-            default:
-                return lowerDesc.contains("ammo") || lowerDesc.contains("shell") || lowerDesc.contains("cartridge");
+        private boolean isProbablyAmmoForGunByName(String lowerDesc) {
+            switch (this.gunItemName) {
+                case "RIFLE":
+                    return lowerDesc.contains("rifle") || lowerDesc.contains("762") || lowerDesc.contains("556") || lowerDesc.contains("rifle_ammo");
+                case "PISTOL":
+                case "SMG":
+                    return lowerDesc.contains("pistol") || lowerDesc.contains("9mm") || lowerDesc.contains("pistol_ammo");
+                case "SHOTGUN":
+                    return lowerDesc.contains("shotgun") || lowerDesc.contains("shell") || lowerDesc.contains("handmade_shell");
+                default:
+                    return lowerDesc.contains("ammo") || lowerDesc.contains("shell") || lowerDesc.contains("cartridge");
+            }
         }
-    }
 
     /**
      * Detect gun type. Prefer reading Gun -> projectile item id; fallback to other reflection and name heuristics.
